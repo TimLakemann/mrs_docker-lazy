@@ -1,5 +1,7 @@
 volumes:
 
+  catkin_workspace:
+
   shared_data:
 
   uav_custom_files:
@@ -11,6 +13,13 @@ volumes:
 services:
 
   # will copy session-specific data shared between containers from the shared_data container to a shared volume
+  copy_catkin_workspace:
+    image: uvdar_workspace:1.0.1
+    volumes:
+      - catkin_workspace:/tmp/docker/catkin_workspace_1:consistent
+    tty: true
+    command: sh -c "rm -rvf /tmp/docker/catkin_workspace_1/*; mkdir -pv /tmp/docker/catkin_workspace_1; cp -rv /etc/docker/catkin_workspace_1/* /tmp/docker/catkin_workspace_1/"
+
   copy_shared_data:
     image: shared_data:worlds
     volumes:
@@ -80,24 +89,57 @@ services:
       - ./stack.env
     tty: true
     command: bash -c "waitForHw && roslaunch mrs_uav_core core.launch platform_config:=`rospack find mrs_robofly_core`/config/platform_config.yaml custom_config:=/etc/docker/shared_data/custom_config.yaml world_config:=/etc/docker/shared_data/world_local.yaml network_config:=/etc/docker/shared_data/network_config.yaml"
-
-  # starts the camera drivers
-  # cameras:
-  #   image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-  #   depends_on:
-  #     - rostime
-  #   network_mode: host
-  #   volumes:
-  #     - shared_data:/etc/docker/shared_data:consistent
-  #     - uav_custom_files:/etc/docker/uav_custom_files:consistent
-  #   devices:
-  #     - /dev/:/dev/
-  #   privileged: true
-  #   env_file:
-  #     - ./stack.env
-  #   tty: true
-  #   command: bash -c "waitForTime && roslaunch /etc/docker/uav_custom_files/launch_files/cameras.launch"
-
+  # starts the UVDAR
+  uvdar_package:
+    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
+    network_mode: host
+    depends_on:
+      - copy_catkin_workspace
+      - copy_uav_custom_files
+    volumes:
+      - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
+      - uav_custom_files:/etc/docker/uav_custom_files:consistent
+      - /dev/:/dev/
+      - /sys/class/leds/uvled/:/sys/class/leds/uvled/
+      - /run/udev:/run/udev:ro
+#      - /home/uav/custom/:/etc/docker/custom/
+#      - /home/uav/coredumps/:/etc/docker/coredumps/
+    env_file:
+      - ./stack.env
+    tty: true
+    privileged: true
+    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash && source /etc/docker/uav_custom_files/uvdar/set_ids.sh && roslaunch uvdar_core rw_one_sided_rpicam.launch calibrations_folder:=/etc/docker/uav_custom_files/"
+  # starts the Reflection Node
+  reflection_package:
+    image: timlakemann/mrs_system_custom_python_pkg:0.0
+    network_mode: host
+    depends_on:
+      - copy_catkin_workspace
+      - copy_uav_custom_files
+    volumes:
+      - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
+      - uav_custom_files:/etc/docker/uav_custom_files:consistent
+      - /dev/:/dev/
+    env_file:
+      - ./stack.env
+    tty: true
+    privileged: true
+    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash && roslaunch reflection_node reflection.launch calib_file:=/etc/docker/uav_custom_files/camera_calibrations/calib_results_rp_uv_front.txt"
+  garmin_lidar:
+    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
+    network_mode: host
+    depends_on:
+      - copy_catkin_workspace
+      - copy_uav_custom_files
+    volumes:
+      - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
+      - uav_custom_files:/etc/docker/uav_custom_files:consistent
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    env_file:
+      - ./stack.env
+    tty: true
+    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash; roslaunch garmin_lidar garmin_lidar.launch"
   # starts the node that handles automatic initialization of the system and takeoff
   automatic_start:
     image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}

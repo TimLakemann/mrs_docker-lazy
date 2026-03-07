@@ -19,6 +19,7 @@ RUN [ ! -e /${WORKSPACE_PATH}/.catkin_tools ] && cd /${WORKSPACE_PATH} && catkin
 COPY src/ /${WORKSPACE_PATH}/src/
 RUN cd /${WORKSPACE_PATH} && catkin build -s
 
+RUN apt-get update && apt-get install -y python3-scipy && rm -rf /var/lib/apt/lists/*
 #############################################################################
 
 # SECOND STAGE: COPY THE WORKSPACE TO A BLANK APLINE IMAGE
