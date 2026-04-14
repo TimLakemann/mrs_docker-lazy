@@ -11,7 +11,6 @@ volumes:
   logs:
 
 services:
-
   # will copy session-specific data shared between containers from the shared_data container to a shared volume
   copy_catkin_workspace:
     image: uvdar_workspace:1.0.1
@@ -49,9 +48,7 @@ services:
     tty: true
     command: roscore
 
-  # after roscore is started
-  # -> set a parameter that tells the system that simulation time is NOT used
-  # this container then stops
+# set sim time TRUE for bag playback
   rostime:
     image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
     network_mode: host
@@ -62,126 +59,33 @@ services:
     tty: true
     command: bash -c "waitForRos && rosparam set use_sim_time false"
 
-  # starts the HW API for connecting the MRS UAV System to PX4
-  hw_api:
+  # plays the rosbag for rerun
+  bagfile:
     image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
+    network_mode: host
     depends_on:
       - rostime
-    network_mode: host
-    volumes:
-      - shared_data:/etc/docker/shared_data:consistent
-      - /dev/:/dev/
-    privileged: true
     env_file:
       - ./stack.env
+    volumes:
+      # Option A: bind mount your bag folder from the host
+      - /home/mrs/bags/reflection:/etc/docker/bags/reflection:ro
     tty: true
-    command: bash -c "waitForTime && roslaunch mrs_uav_px4_api api.launch"
+    command: bash -c "waitForTime && sleep 1 && rosbag play /etc/docker/bags/reflection/1_2026_03_13_11_27_58/_2026-03-13-11-32-48.bag --clock"
 
-  # starts the MRS UAV System's core
-  uav_core:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    depends_on:
-      - rostime
-    network_mode: host
-    volumes:
-      - shared_data:/etc/docker/shared_data:consistent
-    env_file:
-      - ./stack.env
-    tty: true
-    command: bash -c "waitForHw && roslaunch mrs_uav_core core.launch platform_config:=`rospack find mrs_robofly_core`/config/platform_config.yaml custom_config:=/etc/docker/shared_data/custom_config.yaml world_config:=/etc/docker/shared_data/world_local.yaml network_config:=/etc/docker/shared_data/network_config.yaml"
-  # starts the UVDAR
-  uvdar_package:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    network_mode: host
-    depends_on:
-      - copy_catkin_workspace
-      - copy_uav_custom_files
-    volumes:
-      - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
-      - uav_custom_files:/etc/docker/uav_custom_files:consistent
-      - /dev/:/dev/
-      - /sys/class/leds/uvled/:/sys/class/leds/uvled/
-      - /run/udev:/run/udev:ro
-#      - /home/uav/custom/:/etc/docker/custom/
-#      - /home/uav/coredumps/:/etc/docker/coredumps/
-    env_file:
-      - ./stack.env
-    tty: true
-    privileged: true
-    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash && source /etc/docker/uav_custom_files/uvdar/set_ids.sh && roslaunch uvdar_core rw_one_sided_rpicam.launch calibrations_folder:=/etc/docker/uav_custom_files/"
-  # starts the Reflection Node
-  reflection_package:
+  # starts the Reflection Node in rerun mode
+  reflection_rerun:
     image: timlakemann/mrs_system_custom_python_pkg:0.0
     network_mode: host
     depends_on:
+      - rostime
       - copy_catkin_workspace
-      - copy_uav_custom_files
     volumes:
       - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
-      - uav_custom_files:/etc/docker/uav_custom_files:consistent
-      - /dev/:/dev/
     env_file:
       - ./stack.env
     tty: true
-    privileged: true
-    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash && roslaunch reflection_node reflection.launch calib_file:=/etc/docker/uav_custom_files/camera_calibrations/calib_results_rp_uv_front.txt"
-  garmin_lidar:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    network_mode: host
-    depends_on:
-      - copy_catkin_workspace
-      - copy_uav_custom_files
-    volumes:
-      - catkin_workspace:/etc/docker/catkin_workspace_1:consistent
-      - uav_custom_files:/etc/docker/uav_custom_files:consistent
-    devices:
-      - /dev/i2c-1:/dev/i2c-1
-    env_file:
-      - ./stack.env
-    tty: true
-    command: bash -c "waitForRos && source /etc/docker/catkin_workspace_1/devel/setup.bash; roslaunch garmin_lidar garmin_lidar.launch"
-  # starts the node that handles automatic initialization of the system and takeoff
-  automatic_start:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    depends_on:
-      - rostime
-    network_mode: host
-    volumes:
-      - shared_data:/etc/docker/shared_data:consistent
-    env_file:
-      - ./stack.env
-    tty: true
-    command: bash -c "waitForHw && roslaunch mrs_uav_autostart automatic_start.launch custom_config:=/etc/docker/shared_data/automatic_start.yaml"
-
-  # starts `rosbag record`
-  rosbag:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    depends_on:
-      - rostime
-    network_mode: host
-    volumes:
-      - bag_files:/etc/docker/bag_files:consistent
-      - shared_data:/etc/docker/shared_data:consistent
-    env_file:
-      - ./stack.env
-    tty: true
-    command: bash -c "waitForTime && /etc/docker/shared_data/record.sh"
-
-  rosbridge:
-    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
-    network_mode: host
-    env_file:
-      - ./stack.env
-    tty: true
-    command: bash -c "waitForRos && roslaunch rosbridge_server rosbridge_websocket.launch"
-
-  dogtail:
-    image: klaxalk/dogtail:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - logs:/etc/logs:consistent
-
-  # this container can be used to access a terminal with ROS inside the compose session
+    command: bash -c "waitForTime && sleep 1 && source /etc/docker/catkin_workspace_1/devel/setup.bash && roslaunch reflection_node reflection_rerun.launch"
   terminal:
     image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
     network_mode: host
@@ -200,3 +104,17 @@ services:
     privileged: true
     stdin_open: true
     tty: true
+
+  # records timing topics
+  record_timing:
+    image: ctumrs/mrs_uav_system:${MRS_UAV_SYSTEM_VERSION}
+    network_mode: host
+    depends_on:
+      - rostime
+    volumes:
+      - /home/mrs/bags/reflection/timing_only:/etc/docker/bags/timing_only:consistent
+    env_file:
+      - ./stack.env
+    tty: true
+    stop_grace_period: 10s
+    command: bash -c "waitForTime && rosbag record -e '(.*)/reflection_localizer/timing(.*)' -O /etc/docker/bags/timing_only/robofly.bag"
